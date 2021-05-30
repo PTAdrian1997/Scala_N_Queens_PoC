@@ -10,6 +10,8 @@ import exception.Exceptions.NoBacktrackingRequiredException
 import scala.annotation.tailrec
 import org.slf4j.{Logger, LoggerFactory}
 
+import scala.collection.immutable.Queue
+
 case class Nogood(positions: Map[Int, Int]) {
 
   /**
@@ -111,7 +113,12 @@ object QueenAgent {
     nogoods filter {
       _.positions.keySet contains rowId
     } forall {
-      currentNoGood => !currentNoGood.checkCompatibility(agentView)
+      currentNoGood =>
+        if(currentNoGood.checkCompatibility(agentView)){
+          logger.debug(s"$agentView + is compatible with nogood $currentNoGood")
+          false
+        }
+        else true
     }
 
   /**
@@ -137,9 +144,11 @@ object QueenAgent {
    * @return a function that takes the local view as an argument and returns true if it can lead to a
    *         solution, or false otherwise
    */
-  def acceptableSettlement(nogoods: Nogoods)(rowId: Int, colId: Int): LocalView => Boolean = agentView =>
+  def acceptableSettlement(nogoods: Nogoods)(rowId: Int, colId: Int): LocalView => Boolean = agentView => {
+    require(!agentView.contains(rowId), "The provided LocalView should not contain the provided rowId queen key")
     (checkAgentViewIncompatibility(nogoods, rowId) apply
       agentView + (rowId -> colId)) && (constraintsAreSatisfied(rowId, colId) apply agentView)
+  }
 
   /**
    * Perform a backtracking step: Search for a new column position assignment; If one is found, then change the
@@ -173,11 +182,8 @@ object QueenAgent {
       case None =>
         context.log.debug("No acceptable solution could be found; Emit a nogood;")
         /* Create a new Nogood using the hyper-resolution rule: */
-//        val newNogood: Nogood = applyHyperResolutionRule(
-//          Range(0, numRows).toList,
-//          newQueenState.communicatedNogoods, currentRow, newQueenState.agentView).head
         val newNogood: Nogood = new HyperResolutionRule(Range(0, numRows).toArray, newQueenState.communicatedNogoods,
-              currentRow, newQueenState.agentView).applyHyperResolutionRule.head
+          currentRow, newQueenState.agentView).applyHyperResolutionRule.head
         context.log.debug(s"Found nogood: $newNogood")
         /* Communicate the nogood to the lowest priority queen from the nogood: */
         queenRegistry(newNogood.getLowestPriorityAgentId) ! QueenMessageAnswerNogood(newNogood, currentRow)
@@ -201,6 +207,23 @@ object QueenAgent {
     }
   }
 
+
+  /**
+   *
+   * @param queenState
+   * @param currentRow
+   * @param numRows
+   * @param queenYellowBook
+   * @param messageQueue
+   * @return
+   */
+  def processQueue(queenState: QueenState, currentRow: Int, numRows: Int,
+                   queenYellowBook: YellowBook, messageQueue: Queue[QueenMessageT]): Behavior[QueenMessageT] = {
+    messageQueue.foreach(message => queenYellowBook(currentRow) ! message)
+    processMessages(
+      currentRow, numRows, queenState, queenYellowBook)
+  }
+
   /**
    * The behavior responsible for finding all the available queens
    *
@@ -211,11 +234,11 @@ object QueenAgent {
    *         otherwise
    */
   def findingQueensBehavior(
-                             context: ActorContext[QueenMessageT],
                              currentRow: Int,
                              numRows: Int,
                              queenYellowBook: YellowBook,
-                             finishedAgents: Int
+                             finishedAgents: Int,
+                             messageQueue: Queue[QueenMessageT]
                            ): Behavior[QueenMessageT] =
     Behaviors.setup {
       context =>
@@ -229,7 +252,7 @@ object QueenAgent {
                 if (serviceInstances.isEmpty) {
                   context.log.debug(s"somehow, the agent ${rowToAdd} is and is not in the listing; Try again")
                   context.system.receptionist ! Receptionist.Find(queenServiceKey(rowToAdd), listingAdapter(context))
-                  findingQueensBehavior(context, currentRow, numRows, queenYellowBook, finishedAgents)
+                  findingQueensBehavior(currentRow, numRows, queenYellowBook, finishedAgents, messageQueue)
                 }
                 else {
                   val newYellowBook: YellowBook = queenYellowBook + (rowToAdd -> serviceInstances.head)
@@ -244,28 +267,26 @@ object QueenAgent {
                     Range(currentRow + 1, numRows).foreach {
                       newYellowBook(_) ! QueenMessageAskOk(rowId = currentRow, colId = 0)
                     }
-                    processMessages(
-                      currentRow, numRows,
-                      QueenState(
-                        context,
-                        currentRow = currentRow,
-                        currentCol = 0,
-                        agentView = Map(currentRow -> 0),
-                        communicatedNogoods = EmptyNogoods,
-                        neighbours = Range(currentRow + 1, numRows).toSet,
-                      ), newYellowBook)
+                    processQueue(QueenState(
+                      context,
+                      currentRow = currentRow,
+                      currentCol = 0,
+                      agentView = Map(currentRow -> 0),
+                      communicatedNogoods = EmptyNogoods,
+                      neighbours = Range(currentRow + 1, numRows).toSet,
+                    ), currentRow, numRows, newYellowBook, messageQueue)
                   }
                   else {
-                    findingQueensBehavior(context, currentRow, numRows, newYellowBook, finishedAgents)
+                    findingQueensBehavior(currentRow, numRows, newYellowBook, finishedAgents, messageQueue)
                   }
                 }
               case None =>
                 context.log.info("The subscribed agent could not be identified")
-                findingQueensBehavior(context, currentRow, numRows, queenYellowBook, finishedAgents)
+                findingQueensBehavior(currentRow, numRows, queenYellowBook, finishedAgents, messageQueue)
             }
           case message =>
             context.log.debug(s"$currentRow has received $message ahead of time")
-            findingQueensBehavior(context, currentRow, numRows, queenYellowBook, finishedAgents)
+            findingQueensBehavior(currentRow, numRows, queenYellowBook, finishedAgents, messageQueue :+ message)
         }
     }
 
@@ -275,7 +296,8 @@ object QueenAgent {
     Range(0, numberOfQueens).foreach { otherRow =>
       context.system.receptionist ! Receptionist.Find(queenServiceKey(otherRow), listingAdapter(context))
     }
-    findingQueensBehavior(context, rowId, numberOfQueens, Map.empty[Int, ActorRef[QueenMessageT]], 0)
+    findingQueensBehavior(rowId, numberOfQueens, Map.empty[Int, ActorRef[QueenMessageT]], 0,
+      Queue.empty[QueenMessageT])
   }
 
   /**
@@ -299,7 +321,7 @@ object QueenAgent {
         val newQueenState: QueenState = queenState.changeAgentValue(otherRowId, otherColId)
         queenState.context.log.debug(s"new queen agent: ${newQueenState}")
         if (!(acceptableSettlement(newQueenState.communicatedNogoods)
-        (currentRow, newQueenState.currentCol) apply newQueenState.agentView)) {
+        (currentRow, newQueenState.currentCol) apply newQueenState.agentView - currentRow)) {
           /* Search for another value from this domain that is consistent with the new agent view
           * (except for the row of the calling queen)
           * */
@@ -318,7 +340,7 @@ object QueenAgent {
             .foldLeft(queenState.addNogood(nogood)) {
               case (acc, (queenId, colVal)) =>
                 if (!acc.neighbours.contains(queenId)) {
-                  queenRegistry(queenId) ! QueenMessageAddLink(currentRow)
+//                  queenRegistry(queenId) ! QueenMessageAddLink(currentRow)
                   acc
                     .changeAgentValue(queenId, colVal)
                 } else {
