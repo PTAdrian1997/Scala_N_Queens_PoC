@@ -95,10 +95,10 @@ object QueenAgent {
    * or the nogoods that are compatible with the provided agent view that make it impractical
    *
    * @param lesserAgentView An agent view that doesn't contain the position of the calling queen
-   *                  (i.e. a lesser agent view)
-   * @param numRows   The number of rows in the problem
-   * @param nogoods   The list of accumulated nogoods
-   * @param rowId     The row id of the calling queen
+   *                        (i.e. a lesser agent view)
+   * @param numRows         The number of rows in the problem
+   * @param nogoods         The list of accumulated nogoods
+   * @param rowId           The row id of the calling queen
    * @return a Right containing the position that can satisfy all the constraints and doesn't cause
    *         the augmented agent view to be compatible with a nogood from the list, or the nogoods
    *         that are compatible with the provided agent view
@@ -106,16 +106,18 @@ object QueenAgent {
   def findAcceptableSolution(lesserAgentView: LocalView, numRows: Int, nogoods: Nogoods,
                              rowId: Int): Either[StateInvalidResponses, ColumnValueType] = {
     val domain: ColumnDomain = ChessboardStateValidator.domain(numRows)
+
     @tailrec
     def innerLoop(index: Index, invalidResponses: StateInvalidResponses):
     Either[StateInvalidResponses, ColumnValueType] =
-      if(index == domain.length) Left(invalidResponses)
+      if (index == domain.length) Left(invalidResponses)
       else ChessboardStateValidator.stateIsAcceptableForAgent(nogoods, rowId, domain(index), lesserAgentView) match {
         case ChessboardStateValidator.StateValidResponse =>
           Right(domain(index))
         case invalidResponse: ChessboardStateValidator.StateInvalidResponse =>
           innerLoop(index + 1, invalidResponses :+ invalidResponse)
       }
+
     innerLoop(0, EmptyStateInvalidResponses)
   }
 
@@ -130,7 +132,7 @@ object QueenAgent {
       _.positions.keySet contains rowId
     } forall {
       currentNoGood =>
-        if(currentNoGood.checkCompatibility(agentView)){
+        if (currentNoGood.checkCompatibility(agentView)) {
           logger.debug(s"$agentView + is compatible with nogood $currentNoGood")
           false
         }
@@ -185,7 +187,7 @@ object QueenAgent {
         context.log.debug("No acceptable solution could be found; Emit a nogood;")
         /* Create a new Nogood using the hyper-resolution rule: */
         val newNogood: Nogood = new HyperResolutionRule(Range(0, numRows).toArray, newQueenState.communicatedNogoods,
-                currentRow, newQueenState.agentView).applyHyperResolutionRule(stateInvalidResponses).head
+          currentRow, newQueenState.agentView).applyHyperResolutionRule(stateInvalidResponses).head
         context.log.debug(s"Found nogood: $newNogood")
         /* Communicate the nogood to the lowest priority queen from the nogood: */
         queenRegistry(newNogood.getLowestPriorityAgentId) ! QueenMessageAnswerNogood(newNogood, currentRow)
@@ -335,17 +337,21 @@ object QueenAgent {
         /* Check if the value of the receiving queen is consistent with its new agent view: */
         val newQueenState: QueenState = queenState.changeAgentValue(otherRowId, otherColId)
         queenState.context.log.debug(s"new queen agent: ${newQueenState}")
-        if (!(acceptableSettlement(newQueenState.communicatedNogoods)
-        (currentRow, newQueenState.currentCol) apply newQueenState.agentView - currentRow)) {
-          /* Search for another value from this domain that is consistent with the new agent view
-          * (except for the row of the calling queen)
-          * */
-          newQueenState.context.log.debug("proceed with backtrack")
-          backtrack(newQueenState.context, newQueenState, currentRow, numRows, queenRegistry)
-        }
-        else {
-          newQueenState.context.log.debug("The current position is fine")
-          processMessages(currentRow, numRows, newQueenState, queenRegistry)
+        ChessboardStateValidator.stateIsAcceptableForAgent(
+          newQueenState.communicatedNogoods,
+          currentRow,
+          newQueenState.currentCol,
+          newQueenState.agentView - currentRow
+        ) match {
+          case ChessboardStateValidator.StateValidResponse =>
+            newQueenState.context.log.debug("The current position is fine")
+            processMessages(currentRow, numRows, newQueenState, queenRegistry)
+          case ChessboardStateValidator.StateInvalidResponse(nogood) =>
+            /* Search for another value from this domain that is consistent with the new agent view
+            * (except for the row of the calling queen)
+            * */
+            newQueenState.context.log.debug("proceed with backtrack")
+            backtrack(newQueenState.context, newQueenState, currentRow, numRows, queenRegistry)
         }
       case QueenMessageAnswerNogood(nogood, senderId) =>
         queenState.context.log.debug(s"$currentRow received another nogood message $nogood from $senderId")
@@ -355,7 +361,7 @@ object QueenAgent {
             .foldLeft(queenState.addNogood(nogood)) {
               case (acc, (queenId, colVal)) =>
                 if (!acc.neighbours.contains(queenId)) {
-//                  queenRegistry(queenId) ! QueenMessageAddLink(currentRow)
+                  //                  queenRegistry(queenId) ! QueenMessageAddLink(currentRow)
                   acc
                     .changeAgentValue(queenId, colVal)
                 } else {
