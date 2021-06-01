@@ -181,25 +181,11 @@ object QueenAgent {
                 queenRegistry: YellowBook): Behavior[QueenMessageT] = {
     val agentViewToTest: LocalView = newQueenState.agentView.view.filterKeys(_ != currentRow).toMap
     findAcceptableSolution(agentViewToTest, numRows, newQueenState.communicatedNogoods, currentRow) match {
-      case Some(newColumnPosition) =>
-        val newQueenState2: QueenState = newQueenState.changeCol(newColumnPosition)
-        context.log.debug(s"Found possible acceptable solution $newColumnPosition in the view: $agentViewToTest; new agent view: ${newQueenState2.agentView}")
-        /* Send the new value as an Ok? message to all the lower priority queens connected: */
-        newQueenState.neighbours.foreach { neighbourId =>
-          context.log.debug(s"Send Ok($currentRow, $newColumnPosition) to $neighbourId")
-          queenRegistry(neighbourId) ! QueenMessageAskOk(currentRow, newColumnPosition)
-        }
-        processMessages(
-          currentRow,
-          numRows,
-          newQueenState2,
-          queenRegistry
-        )
-      case None =>
+      case Left(stateInvalidResponses) =>
         context.log.debug("No acceptable solution could be found; Emit a nogood;")
         /* Create a new Nogood using the hyper-resolution rule: */
         val newNogood: Nogood = new HyperResolutionRule(Range(0, numRows).toArray, newQueenState.communicatedNogoods,
-          currentRow, newQueenState.agentView).applyHyperResolutionRule.head
+                currentRow, newQueenState.agentView).applyHyperResolutionRule(stateInvalidResponses).head
         context.log.debug(s"Found nogood: $newNogood")
         /* Communicate the nogood to the lowest priority queen from the nogood: */
         queenRegistry(newNogood.getLowestPriorityAgentId) ! QueenMessageAnswerNogood(newNogood, currentRow)
@@ -220,6 +206,19 @@ object QueenAgent {
             queenRegistry
           )
         }
+      case Right(newColumnPosition) =>
+        val newQueenState2: QueenState = newQueenState.changeCol(newColumnPosition)
+        /* Send the new value as an Ok? message to all the lower priority queens connected: */
+        newQueenState.neighbours.foreach { neighbourId =>
+          context.log.debug(s"Send Ok($currentRow, $newColumnPosition) to $neighbourId")
+          queenRegistry(neighbourId) ! QueenMessageAskOk(currentRow, newColumnPosition)
+        }
+        processMessages(
+          currentRow,
+          numRows,
+          newQueenState2,
+          queenRegistry
+        )
     }
   }
 

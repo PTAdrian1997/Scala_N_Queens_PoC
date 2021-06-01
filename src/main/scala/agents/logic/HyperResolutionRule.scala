@@ -1,6 +1,6 @@
 package agents.logic
 
-import agents.logic.ChessboardStateValidator.AcceptanceResponses
+import agents.logic.ChessboardStateValidator.{AcceptanceResponses, StateInvalidResponses}
 import agents.{ColumnDomain, ColumnValueType, EmptyLocalViews, Index, Indexes, LocalView, LocalViews, Nogood, Nogoods}
 import akka.actor.typed.scaladsl.LoggerOps
 import constraints.ConflictAvoidingArgument
@@ -105,7 +105,7 @@ class HyperResolutionRule(domain: ColumnDomain,
    *                            agents except for the caller) as a state that cannot lead to a solution
    * @return a list of nogoods
    */
-  def applyHyperResolutionRule(acceptanceResponses: AcceptanceResponses): Array[Nogood] = {
+  def applyHyperResolutionRule(acceptanceResponses: StateInvalidResponses): Array[Nogood] = {
     /*
     * Theoretically, this method should only be called when the current row cannot choose any column assignment,
     * therefore, for each possible column assignment, either a constraint is violated or a Nogood is compatible with
@@ -113,11 +113,7 @@ class HyperResolutionRule(domain: ColumnDomain,
     * called.
     * */
 
-    val assignmentLocalViews: LocalViews = acceptanceResponses.map {
-      case ChessboardStateValidator.StateInvalidResponse(nogood) => nogood.positions
-      case ChessboardStateValidator.StateValidResponse =>
-        throw new NoBacktrackingRequiredException(localView)
-    }
+    val assignmentLocalViews: LocalViews = acceptanceResponses.map(_.nogood.positions)
 
     val mergedLocalViews: LocalViews = mergeLocalViews(assignmentLocalViews)
     /* If there are nogoods that only differ in the value assignment of one
