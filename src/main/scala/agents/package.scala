@@ -9,6 +9,7 @@ package object agents {
   val EmptyNogoods: Nogoods = Array.empty[Nogood]
 
   type LocalView = Map[Int, Int]
+  val EmptyLocalView: LocalView = Map.empty[Int, Int]
   type LocalViews = Array[LocalView]
 
   type Index = Int
