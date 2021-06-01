@@ -5,7 +5,8 @@ import agents.{ColumnDomain, ColumnValueType, LocalView, Nogood, Nogoods}
 import constraints.{ConflictAvoidingArgument, Constraint}
 
 object ChessboardStateValidator {
-  trait AcceptanceResponseT
+  sealed trait AcceptanceResponseT
+  type AcceptanceResponses = Array[AcceptanceResponseT]
 
   case object StateValidResponse extends AcceptanceResponseT
 
