@@ -94,4 +94,22 @@ class ChessboardStateValidatorTest extends AnyFeatureSpec with GivenWhenThen wit
     }
   }
 
+  Feature("ChessboardStateValidator.allConstraintsAreSatisfied"){
+    val numRows: Int = 5
+    Given(s"$numRows rows")
+    val chessboardStateValidator: ChessboardStateValidator = new ChessboardStateValidator(numRows)
+    Scenario("The agent view provided contains the caller id"){
+      Given("An agent view that contains the caller id")
+    }
+    Scenario("In the agent view there aren't any violated constraints"){
+
+    }
+    Scenario("In the agent view there are violated constraints, but they don't involve the caller"){
+
+    }
+    Scenario("In the agent view there are multiple violated constraints that involve the caller"){
+
+    }
+  }
+
 }
