@@ -39,7 +39,7 @@ object QueenAgent {
 
   sealed trait QueenMessageT
 
-  case class QueenMessageAnswerOk() extends QueenMessageT
+//  case class QueenMessageAnswerOk() extends QueenMessageT
 
   case class QueenMessageAskOk(rowId: Int, colId: Int) extends QueenMessageT
 
@@ -52,8 +52,6 @@ object QueenAgent {
   sealed case class ListingResponse(listing: Receptionist.Listing) extends QueenMessageT
 
   case class FoundAllAgents(agentId: Int) extends QueenMessageT
-
-  import constraints.Constraint._
 
   implicit val logger: Logger = LoggerFactory.getLogger(LoggerName)
 
@@ -108,64 +106,19 @@ object QueenAgent {
     val domain: ColumnDomain = ChessboardStateValidator.domain(numRows)
 
     @tailrec
-    def innerLoop(index: Index, invalidResponses: StateInvalidResponses):
-    Either[StateInvalidResponses, ColumnValueType] =
+    def innerLoop(index: Index, invalidResponses: StateInvalidResponses): Either[StateInvalidResponses, ColumnValueType] =
       if (index == domain.length) Left(invalidResponses)
-      else ChessboardStateValidator.stateIsAcceptableForAgent(nogoods, rowId, domain(index), lesserAgentView) match {
-        case ChessboardStateValidator.StateValidResponse =>
-          Right(domain(index))
-        case invalidResponse: ChessboardStateValidator.StateInvalidResponse =>
-          innerLoop(index + 1, invalidResponses :+ invalidResponse)
+      else {
+        logger.debug(s"current trial value: ${domain(index)}")
+        ChessboardStateValidator.stateIsAcceptableForAgent(nogoods, rowId, domain(index), lesserAgentView) match {
+          case ChessboardStateValidator.StateValidResponse =>
+            Right(domain(index))
+          case invalidResponse: ChessboardStateValidator.StateInvalidResponse =>
+            innerLoop(index + 1, invalidResponses :+ invalidResponse)
+        }
       }
 
     innerLoop(0, EmptyStateInvalidResponses)
-  }
-
-  /**
-   * Check if the current agent view is not compatible with all the nogoods collected up until now.
-   *
-   * @param nogoods The list of nogoods that have been received / generated up to this point
-   * @return true if no nogood compatible with the current local view could be found, and false otherwise
-   */
-  def checkAgentViewIncompatibility(nogoods: Nogoods, rowId: Int): LocalView => Boolean = agentView =>
-    nogoods filter {
-      _.positions.keySet contains rowId
-    } forall {
-      currentNoGood =>
-        if (currentNoGood.checkCompatibility(agentView)) {
-          logger.debug(s"$agentView + is compatible with nogood $currentNoGood")
-          false
-        }
-        else true
-    }
-
-  /**
-   * Check if the position of the calling agent satisfies all the constraints with respect to the associated
-   * local view
-   *
-   * @param rowId the row number associated with the calling agent
-   * @param colId the current column value assignment of the calling agent
-   * @return
-   */
-  def constraintsAreSatisfied(rowId: Int, colId: Int): LocalView => Boolean = agentView =>
-    agentView forall {
-      case (otherRowId, otherColId) if otherRowId != rowId =>
-        ConflictAvoidingArgument(otherRowId, otherColId, rowId, colId).checkConstraint
-      case _ => true
-    }
-
-  /**
-   * Check if the current value assignment (position) can lead to a possible solution
-   *
-   * @param rowId      the row associated with the calling agent
-   * @param queenState the current state of the calling agent
-   * @return a function that takes the local view as an argument and returns true if it can lead to a
-   *         solution, or false otherwise
-   */
-  def acceptableSettlement(nogoods: Nogoods)(rowId: Int, colId: Int): LocalView => Boolean = agentView => {
-    require(!agentView.contains(rowId), "The provided LocalView should not contain the provided rowId queen key")
-    (checkAgentViewIncompatibility(nogoods, rowId) apply
-      agentView + (rowId -> colId)) && (constraintsAreSatisfied(rowId, colId) apply agentView)
   }
 
   /**
@@ -183,10 +136,10 @@ object QueenAgent {
                 queenRegistry: YellowBook): Behavior[QueenMessageT] = {
     val agentViewToTest: LocalView = newQueenState.agentView.view.filterKeys(_ != currentRow).toMap
     findAcceptableSolution(agentViewToTest, numRows, newQueenState.communicatedNogoods, currentRow) match {
-      case Left(stateInvalidResponses) =>
+      case Left(stateInvalidResponses: StateInvalidResponses) =>
         context.log.debug("No acceptable solution could be found; Emit a nogood;")
         /* Create a new Nogood using the hyper-resolution rule: */
-        val newNogood: Nogood = new HyperResolutionRule(Range(0, numRows).toArray, newQueenState.communicatedNogoods,
+        val newNogood: Nogood = new HyperResolutionRule(Range(0, numRows).toArray,
           currentRow, newQueenState.agentView).applyHyperResolutionRule(stateInvalidResponses).head
         context.log.debug(s"Found nogood: $newNogood")
         /* Communicate the nogood to the lowest priority queen from the nogood: */
@@ -208,7 +161,7 @@ object QueenAgent {
             queenRegistry
           )
         }
-      case Right(newColumnPosition) =>
+      case Right(newColumnPosition: ColumnValueType) =>
         val newQueenState2: QueenState = newQueenState.changeCol(newColumnPosition)
         /* Send the new value as an Ok? message to all the lower priority queens connected: */
         newQueenState.neighbours.foreach { neighbourId =>
@@ -333,10 +286,10 @@ object QueenAgent {
                       queenRegistry: YellowBook): Behavior[QueenMessageT] =
     Behaviors.receiveMessage {
       case QueenMessageAskOk(otherRowId, otherColId) =>
-        queenState.context.log.debug(s"$currentRow has received QueenMessageAskOk($otherRowId, $otherColId); old queen agent: ${queenState}")
+        queenState.context.log.debug(s"$currentRow has received QueenMessageAskOk($otherRowId, $otherColId); old queen agent nogoods: ${queenState.communicatedNogoods.mkString("Array(", ", ", ")")}")
         /* Check if the value of the receiving queen is consistent with its new agent view: */
         val newQueenState: QueenState = queenState.changeAgentValue(otherRowId, otherColId)
-        queenState.context.log.debug(s"new queen agent: ${newQueenState}")
+        queenState.context.log.debug(s"new queen agent: $newQueenState")
         ChessboardStateValidator.stateIsAcceptableForAgent(
           newQueenState.communicatedNogoods,
           currentRow,
@@ -346,7 +299,7 @@ object QueenAgent {
           case ChessboardStateValidator.StateValidResponse =>
             newQueenState.context.log.debug("The current position is fine")
             processMessages(currentRow, numRows, newQueenState, queenRegistry)
-          case ChessboardStateValidator.StateInvalidResponse(nogood) =>
+          case _ : ChessboardStateValidator.StateInvalidResponse =>
             /* Search for another value from this domain that is consistent with the new agent view
             * (except for the row of the calling queen)
             * */

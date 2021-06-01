@@ -3,6 +3,7 @@ package agents.logic
 import agents.logic.ChessboardStateValidator.{AcceptanceResponseT, StateInvalidResponse, StateValidResponse}
 import agents.{ColumnDomain, ColumnValueType, LocalView, Nogood, Nogoods}
 import constraints.{ConflictAvoidingArgument, Constraint}
+import org.slf4j.Logger
 
 object ChessboardStateValidator {
   sealed trait AcceptanceResponseT
@@ -14,7 +15,7 @@ object ChessboardStateValidator {
   type StateInvalidResponses = Array[StateInvalidResponse]
   val EmptyStateInvalidResponses: StateInvalidResponses = Array.empty[StateInvalidResponse]
 
-  lazy val domain: Int => ColumnDomain = numCols => Range(0, numCols).toArray
+  lazy val domain: Int => ColumnDomain = numRows => Range(0, numRows).toArray
 
   /**
    * Try to find the nogood that is compatible with the provided augmented agent view
@@ -24,8 +25,9 @@ object ChessboardStateValidator {
    * @return a StateInvalidResponse instance with the nogood that is compatible with the augmented agent view,
    *         or StateValidResponse, if no such nogood could be found
    */
-  private def nogoodsAreIncompatible(nogoods: Nogoods, augmentedAgentView: LocalView, callerId: Int): AcceptanceResponseT = {
+  private def nogoodsAreIncompatible(nogoods: Nogoods, augmentedAgentView: LocalView, callerId: Int) (implicit logger: Logger): AcceptanceResponseT = {
     require(augmentedAgentView.contains(callerId), "The augmented agent view must contain the caller agent's id")
+    logger.debug(s"augmentedAgentView: $augmentedAgentView")
     nogoods.sortBy(-_.positions.size).find(currentNogood => currentNogood.positions.keySet.contains(callerId) &&
       currentNogood.checkCompatibility(augmentedAgentView)) match {
       case Some(compatibleNogood) => StateInvalidResponse(compatibleNogood)
@@ -43,13 +45,14 @@ object ChessboardStateValidator {
    *         constraint could be found
    */
   private def allConstraintsAreSatisfied(callerId: Int, callerValue: ColumnValueType,
-                                 lesserAgentView: LocalView): AcceptanceResponseT = {
+                                 lesserAgentView: LocalView)(implicit logger: Logger): AcceptanceResponseT = {
     require(!lesserAgentView.contains(callerId), "The lesser agent view must not contain the caller agent's Id")
+    logger.debug(s"lesserAgentView: $lesserAgentView")
     lesserAgentView.find {
       case (otherKey, _) if otherKey == callerId => false
-      case (otherKey, otherValue) =>
-        Constraint
-          .ConflictAvoidingConstraint(ConflictAvoidingArgument(callerId, callerId, otherKey, otherValue))
+      case (otherKey, otherValue) if otherKey != callerId =>
+        !Constraint
+          .ConflictAvoidingConstraint(ConflictAvoidingArgument(callerId, callerValue, otherKey, otherValue))
           .checkConstraint
     } match {
       case Some((otherKey, otherValue)) => StateInvalidResponse(Nogood(Map(callerId -> callerValue,
@@ -67,8 +70,8 @@ object ChessboardStateValidator {
    * @return a StateInvalidResponse instance if the state or agent view is not consistent with
    *         the calling agent's position, or StateValidResponse otherwise
    */
-  def stateIsAcceptableForAgent(nogoods: Nogoods, callerKey: Int, callerValue: Int,
-                                lesserAgentView: LocalView): AcceptanceResponseT = {
+  def stateIsAcceptableForAgent(nogoods: Nogoods, callerKey: Int, callerValue: ColumnValueType,
+                                lesserAgentView: LocalView)(implicit logger: Logger): AcceptanceResponseT = {
     nogoodsAreIncompatible(nogoods, lesserAgentView + (callerKey -> callerValue), callerKey) match {
       case stateInvalidResponse: StateInvalidResponse => stateInvalidResponse
       case StateValidResponse =>

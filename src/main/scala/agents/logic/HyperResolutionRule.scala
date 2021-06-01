@@ -15,7 +15,6 @@ import org.slf4j.Logger
 import scala.collection.immutable.{AbstractMap, SeqMap, SortedMap}
 
 class HyperResolutionRule(domain: ColumnDomain,
-                          nogoods: Nogoods,
                           currentRow: Int,
                           localView: LocalView)(implicit logger: Logger) {
 
@@ -35,7 +34,7 @@ class HyperResolutionRule(domain: ColumnDomain,
    * @return the list of nogoods that prevent this agent view from reaching a solution,
    *         or NoBacktrackingRequiredException, if a solution is still reachable
    */
-  private def nogoodsToConsider: LocalViews = {
+  private def nogoodsToConsider(nogoods: Nogoods): LocalViews = {
     val imaginaryLocalView: LocalView = localView - currentRow
     val validNogoods: Nogoods = nogoods.filter(_.positions.keySet.contains(currentRow))
       .sortBy(-_.positions.keySet.size)
@@ -113,7 +112,8 @@ class HyperResolutionRule(domain: ColumnDomain,
     * called.
     * */
 
-    val assignmentLocalViews: LocalViews = acceptanceResponses.map(_.nogood.positions)
+    val assignmentLocalViews: LocalViews = acceptanceResponses.map(_.nogood.positions - currentRow)
+    logger.debug(s"assignmentLocalViews: ${assignmentLocalViews.mkString("Array(", ", ", ")")}")
 
     val mergedLocalViews: LocalViews = mergeLocalViews(assignmentLocalViews)
     /* If there are nogoods that only differ in the value assignment of one

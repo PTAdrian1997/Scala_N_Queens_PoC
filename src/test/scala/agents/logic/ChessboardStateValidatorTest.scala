@@ -10,9 +10,7 @@ class ChessboardStateValidatorTest extends AnyFeatureSpec with GivenWhenThen wit
  with PrivateMethodTester {
 
   Feature("ChessboardStateValidator.nogoodsAreIncompatible"){
-    val numRows: Int = 4
-    Given(s"$numRows rows")
-    val chessboardStateValidator: ChessboardStateValidator = new ChessboardStateValidator(numRows)
+
     Scenario("The list of nogoods is empty and the augmented view is empty"){
       Given("An empty list of nogoods")
       val nogoods: Nogoods = EmptyNogoods
@@ -23,7 +21,7 @@ class ChessboardStateValidatorTest extends AnyFeatureSpec with GivenWhenThen wit
       When("nogoodsAreIncompatible is called")
       val thrown = intercept[IllegalArgumentException]{
         val nogoodsAreIncompatible = PrivateMethod[AcceptanceResponseT](Symbol("nogoodsAreIncompatible"))
-        val value = chessboardStateValidator invokePrivate nogoodsAreIncompatible(nogoods, agentView, callerId)
+        val value = ChessboardStateValidator invokePrivate nogoodsAreIncompatible(nogoods, agentView, callerId)
       }
       Then("It must throw an IllegalArgumentException exception")
       thrown must have message "requirement failed: The augmented agent view must contain the caller agent's id"
@@ -38,7 +36,7 @@ class ChessboardStateValidatorTest extends AnyFeatureSpec with GivenWhenThen wit
       When("nogoodsAreIncompatible is called")
       val thrown = intercept[IllegalArgumentException]{
         val nogoodsAreIncompatible = PrivateMethod[AcceptanceResponseT](Symbol("nogoodsAreIncompatible"))
-        chessboardStateValidator invokePrivate nogoodsAreIncompatible(nogoods, agentView, callerId)
+        ChessboardStateValidator invokePrivate nogoodsAreIncompatible(nogoods, agentView, callerId)
       }
       Then("It must throw an IllegalArgumentException exception")
       thrown must have message "requirement failed: The augmented agent view must contain the caller agent's id"
@@ -52,7 +50,7 @@ class ChessboardStateValidatorTest extends AnyFeatureSpec with GivenWhenThen wit
       And(s"$callerId as the callerId")
       When("The nogoodsAreIncompatible method is called")
       val nogoodsAreIncompatible = PrivateMethod[AcceptanceResponseT](Symbol("nogoodsAreIncompatible"))
-      val actualResult: AcceptanceResponseT = chessboardStateValidator
+      val actualResult: AcceptanceResponseT = ChessboardStateValidator
         .invokePrivate(nogoodsAreIncompatible(nogoods, agentView, callerId))
       Then("The result should be the StateValidResponse object")
       actualResult mustBe StateValidResponse
@@ -70,7 +68,7 @@ class ChessboardStateValidatorTest extends AnyFeatureSpec with GivenWhenThen wit
       )
       When("The nogoodsAreIncompatible method is called")
       val nogoodsAreIncompatible = PrivateMethod[AcceptanceResponseT](Symbol("nogoodsAreIncompatible"))
-      val actualResult: AcceptanceResponseT = chessboardStateValidator
+      val actualResult: AcceptanceResponseT = ChessboardStateValidator
         .invokePrivate(nogoodsAreIncompatible(nogoods, agentView, callerId))
       Then("The result must be a StateInvalidResponse containing the compatible nogood")
       actualResult mustBe StateInvalidResponse(Nogood(Map(0 -> 0, 1 -> 3, 2 -> 1)))
@@ -87,7 +85,7 @@ class ChessboardStateValidatorTest extends AnyFeatureSpec with GivenWhenThen wit
       And(s"A caller id equal to $callerId")
       When("The nogoodsAreIncompatible method is called")
       val nogoodsAreIncompatible = PrivateMethod[AcceptanceResponseT](Symbol("nogoodsAreIncompatible"))
-      val actualResult: AcceptanceResponseT = chessboardStateValidator.invokePrivate(nogoodsAreIncompatible(nogoods, agentView, callerId))
+      val actualResult: AcceptanceResponseT = ChessboardStateValidator.invokePrivate(nogoodsAreIncompatible(nogoods, agentView, callerId))
       Then("The result should be a StateInvalidResponse containing the compatible nogood with the " +
         "greatest number of keys")
       actualResult mustBe StateInvalidResponse(Nogood(Map(0 -> 0, 1 -> 3, 2 -> 1)))
@@ -95,9 +93,6 @@ class ChessboardStateValidatorTest extends AnyFeatureSpec with GivenWhenThen wit
   }
 
   Feature("ChessboardStateValidator.allConstraintsAreSatisfied"){
-    val numRows: Int = 5
-    Given(s"$numRows rows")
-    val chessboardStateValidator: ChessboardStateValidator = new ChessboardStateValidator(numRows)
     Scenario("The agent view provided contains the caller id"){
       Given("An agent view that contains the caller id")
     }
