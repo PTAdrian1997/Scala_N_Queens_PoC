@@ -11,11 +11,10 @@ object ChessboardStateValidator {
   case object StateValidResponse extends AcceptanceResponseT
 
   sealed case class StateInvalidResponse(nogood: Nogood) extends AcceptanceResponseT
-}
+  type StateInvalidResponses = Array[StateInvalidResponse]
+  val EmptyStateInvalidResponses: StateInvalidResponses = Array.empty[StateInvalidResponse]
 
-class ChessboardStateValidator(numCols: Int) {
-
-  lazy val domain: ColumnDomain = Range(0, numCols).toArray
+  lazy val domain: Int => ColumnDomain = numCols => Range(0, numCols).toArray
 
   /**
    * Try to find the nogood that is compatible with the provided augmented agent view

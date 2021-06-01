@@ -1,6 +1,7 @@
 package agents
 
-import agents.logic.HyperResolutionRule
+import agents.logic.ChessboardStateValidator.{EmptyStateInvalidResponses, StateInvalidResponses}
+import agents.logic.{ChessboardStateValidator, HyperResolutionRule}
 import akka.actor.typed.{ActorRef, Behavior}
 import akka.actor.typed.receptionist.{Receptionist, ServiceKey}
 import akka.actor.typed.scaladsl.{ActorContext, Behaviors, LoggerOps}
@@ -90,18 +91,33 @@ object QueenAgent {
   }
 
   /**
-   * Find a new position for the calling queen that is consistent with the provided local view
+   * Find a new position for the calling queen that is consistent with the provided local view,
+   * or the nogoods that are compatible with the provided agent view that make it impractical
    *
-   * @param agentView An agent view that doesn't contain the position of the calling queen
+   * @param lesserAgentView An agent view that doesn't contain the position of the calling queen
+   *                  (i.e. a lesser agent view)
    * @param numRows   The number of rows in the problem
    * @param nogoods   The list of accumulated nogoods
    * @param rowId     The row id of the calling queen
-   * @return a Some encapsulating the new position, or None if no acceptable solution could be found
+   * @return a Right containing the position that can satisfy all the constraints and doesn't cause
+   *         the augmented agent view to be compatible with a nogood from the list, or the nogoods
+   *         that are compatible with the provided agent view
    */
-  def findAcceptableSolution(agentView: LocalView, numRows: Int, nogoods: Nogoods, rowId: Int): Option[Int] =
-    Range(0, numRows).find { newPotentialColumn =>
-      acceptableSettlement(nogoods)(rowId, newPotentialColumn) apply agentView
-    }
+  def findAcceptableSolution(lesserAgentView: LocalView, numRows: Int, nogoods: Nogoods,
+                             rowId: Int): Either[StateInvalidResponses, ColumnValueType] = {
+    val domain: ColumnDomain = ChessboardStateValidator.domain(numRows)
+    @tailrec
+    def innerLoop(index: Index, invalidResponses: StateInvalidResponses):
+    Either[StateInvalidResponses, ColumnValueType] =
+      if(index == domain.length) Left(invalidResponses)
+      else ChessboardStateValidator.stateIsAcceptableForAgent(nogoods, rowId, domain(index), lesserAgentView) match {
+        case ChessboardStateValidator.StateValidResponse =>
+          Right(domain(index))
+        case invalidResponse: ChessboardStateValidator.StateInvalidResponse =>
+          innerLoop(index + 1, invalidResponses :+ invalidResponse)
+      }
+    innerLoop(0, EmptyStateInvalidResponses)
+  }
 
   /**
    * Check if the current agent view is not compatible with all the nogoods collected up until now.
