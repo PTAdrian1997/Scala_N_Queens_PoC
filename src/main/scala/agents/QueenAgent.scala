@@ -5,8 +5,6 @@ import agents.logic.{ChessboardStateValidator, HyperResolutionRule}
 import akka.actor.typed.{ActorRef, Behavior}
 import akka.actor.typed.receptionist.{Receptionist, ServiceKey}
 import akka.actor.typed.scaladsl.{ActorContext, Behaviors, LoggerOps}
-import constraints.ConflictAvoidingArgument
-import exception.Exceptions.NoBacktrackingRequiredException
 
 import scala.annotation.tailrec
 import org.slf4j.{Logger, LoggerFactory}
@@ -38,8 +36,6 @@ object QueenAgent {
 
 
   sealed trait QueenMessageT
-
-//  case class QueenMessageAnswerOk() extends QueenMessageT
 
   case class QueenMessageAskOk(rowId: Int, colId: Int) extends QueenMessageT
 
@@ -142,8 +138,6 @@ object QueenAgent {
         val newNogood: Nogood = new HyperResolutionRule(Range(0, numRows).toArray,
           currentRow, newQueenState.agentView).applyHyperResolutionRule(stateInvalidResponses).head
         context.log.debug(s"Found nogood: $newNogood")
-        /* Communicate the nogood to the lowest priority queen from the nogood: */
-        queenRegistry(newNogood.getLowestPriorityAgentId) ! QueenMessageAnswerNogood(newNogood, currentRow)
         if (newNogood.isEmpty) {
           /* Broadcast to all agents that there is no available
           * solution for this problem: */
@@ -154,6 +148,8 @@ object QueenAgent {
           Behaviors.stopped
         }
         else {
+          /* Communicate the nogood to the lowest priority queen from the nogood: */
+          queenRegistry(newNogood.getLowestPriorityAgentId) ! QueenMessageAnswerNogood(newNogood, currentRow)
           processMessages(
             currentRow,
             numRows,
@@ -179,13 +175,14 @@ object QueenAgent {
 
 
   /**
-   *
-   * @param queenState
-   * @param currentRow
-   * @param numRows
-   * @param queenYellowBook
-   * @param messageQueue
-   * @return
+   * Process all the messages that have been sent to this agent while it was still idle.
+   * @param queenState The state of the agent
+   * @param currentRow The row associated with this agent
+   * @param numRows The number of rows from the problem specification
+   * @param queenYellowBook The agents yellow book, that specifies the memory / ip address / some reference point
+   *                        for the agent associated with some row index
+   * @param messageQueue The queue that keeps track of all the messages that have been sent to this agent
+   * @return A new behaviour that will start the real-time processing of the messages
    */
   def processQueue(queenState: QueenState, currentRow: Int, numRows: Int,
                    queenYellowBook: YellowBook, messageQueue: Queue[QueenMessageT]): Behavior[QueenMessageT] = {
@@ -218,7 +215,8 @@ object QueenAgent {
             Range(0, numRows)
               .find(rowId => listing.key.id.equals(queenServiceKeyString(rowId))) match {
               case Some(rowToAdd) =>
-                val serviceInstances: Set[ActorRef[QueenMessageT]] = listing.allServiceInstances(queenServiceKey(rowToAdd))
+                val serviceInstances: Set[ActorRef[QueenMessageT]] =
+                  listing.allServiceInstances(queenServiceKey(rowToAdd))
                 if (serviceInstances.isEmpty) {
                   context.log.debug(s"somehow, the agent ${rowToAdd} is and is not in the listing; Try again")
                   context.system.receptionist ! Receptionist.Find(queenServiceKey(rowToAdd), listingAdapter(context))
@@ -286,7 +284,8 @@ object QueenAgent {
                       queenRegistry: YellowBook): Behavior[QueenMessageT] =
     Behaviors.receiveMessage {
       case QueenMessageAskOk(otherRowId, otherColId) =>
-        queenState.context.log.debug(s"$currentRow has received QueenMessageAskOk($otherRowId, $otherColId); old queen agent nogoods: ${queenState.communicatedNogoods.mkString("Array(", ", ", ")")}")
+        queenState.context.log.debug(s"$currentRow has received QueenMessageAskOk($otherRowId, $otherColId); " +
+          s"old queen agent nogoods: ${queenState.communicatedNogoods.mkString("Array(", ", ", ")")}")
         /* Check if the value of the receiving queen is consistent with its new agent view: */
         val newQueenState: QueenState = queenState.changeAgentValue(otherRowId, otherColId)
         queenState.context.log.debug(s"new queen agent: $newQueenState")
@@ -299,7 +298,7 @@ object QueenAgent {
           case ChessboardStateValidator.StateValidResponse =>
             newQueenState.context.log.debug("The current position is fine")
             processMessages(currentRow, numRows, newQueenState, queenRegistry)
-          case _ : ChessboardStateValidator.StateInvalidResponse =>
+          case _: ChessboardStateValidator.StateInvalidResponse =>
             /* Search for another value from this domain that is consistent with the new agent view
             * (except for the row of the calling queen)
             * */
@@ -343,9 +342,9 @@ object QueenAgent {
       case QueenMessageAddLink(senderId) =>
         queenState.context.log.info(s"Agent $currentRow has received a QueenMessageAddLink($senderId) message;")
         /* Add a link from currentRow to senderId; */
-        val newQueenState: QueenState = queenState.addNeighbor(senderId)
+        //        val newQueenState: QueenState = queenState.addNeighbor(senderId)
         queenRegistry(senderId) ! QueenMessageAskOk(rowId = currentRow, colId = queenState.currentCol)
-        processMessages(currentRow, numRows, newQueenState, queenRegistry)
+        processMessages(currentRow, numRows, queenState, queenRegistry)
     }
 
 
