@@ -148,16 +148,23 @@ object QueenAgent {
           Behaviors.stopped
         }
         else {
-          /* Communicate the nogood to the lowest priority queen from the nogood: */
-          queenRegistry(newNogood.getLowestPriorityAgentId) ! QueenMessageAnswerNogood(newNogood, currentRow)
+//          /* Communicate the nogood to the lowest priority queen from the nogood: */
+//          queenRegistry(newNogood.getLowestPriorityAgentId) ! QueenMessageAnswerNogood(newNogood, currentRow)
+          /* Communicate the nogood to all the agents: */
+          queenRegistry.foreach{
+            case (agentKey, agentReference) if agentKey != currentRow =>
+              agentReference ! QueenMessageAnswerNogood(newNogood, currentRow)
+            case (agentKey, _) if agentKey == currentRow =>
+          }
           processMessages(
             currentRow,
             numRows,
-            newQueenState,
+            newQueenState.addNogood(newNogood),
             queenRegistry
           )
         }
       case Right(newColumnPosition: ColumnValueType) =>
+        context.log.debug(s"Found new position: $newColumnPosition")
         val newQueenState2: QueenState = newQueenState.changeCol(newColumnPosition)
         /* Send the new value as an Ok? message to all the lower priority queens connected: */
         newQueenState.neighbours.foreach { neighbourId =>
@@ -284,8 +291,7 @@ object QueenAgent {
                       queenRegistry: YellowBook): Behavior[QueenMessageT] =
     Behaviors.receiveMessage {
       case QueenMessageAskOk(otherRowId, otherColId) =>
-        queenState.context.log.debug(s"$currentRow has received QueenMessageAskOk($otherRowId, $otherColId); " +
-          s"old queen agent nogoods: ${queenState.communicatedNogoods.mkString("Array(", ", ", ")")}")
+        queenState.context.log.debug(s"$currentRow has received QueenMessageAskOk($otherRowId, $otherColId);")
         /* Check if the value of the receiving queen is consistent with its new agent view: */
         val newQueenState: QueenState = queenState.changeAgentValue(otherRowId, otherColId)
         queenState.context.log.debug(s"new queen agent: $newQueenState")
