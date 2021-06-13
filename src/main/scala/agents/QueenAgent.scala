@@ -1,11 +1,10 @@
 package agents
 
-import agents.logic.HyperResolutionRule
+import agents.logic.ChessboardStateValidator.{EmptyStateInvalidResponses, StateInvalidResponses}
+import agents.logic.{ChessboardStateValidator, HyperResolutionRule}
 import akka.actor.typed.{ActorRef, Behavior}
 import akka.actor.typed.receptionist.{Receptionist, ServiceKey}
 import akka.actor.typed.scaladsl.{ActorContext, Behaviors, LoggerOps}
-import constraints.ConflictAvoidingArgument
-import exception.Exceptions.NoBacktrackingRequiredException
 
 import scala.annotation.tailrec
 import org.slf4j.{Logger, LoggerFactory}
@@ -38,8 +37,6 @@ object QueenAgent {
 
   sealed trait QueenMessageT
 
-  case class QueenMessageAnswerOk() extends QueenMessageT
-
   case class QueenMessageAskOk(rowId: Int, colId: Int) extends QueenMessageT
 
   case class QueenMessageAnswerNogood(nogood: Nogood, senderId: Int) extends QueenMessageT
@@ -51,8 +48,6 @@ object QueenAgent {
   sealed case class ListingResponse(listing: Receptionist.Listing) extends QueenMessageT
 
   case class FoundAllAgents(agentId: Int) extends QueenMessageT
-
-  import constraints.Constraint._
 
   implicit val logger: Logger = LoggerFactory.getLogger(LoggerName)
 
@@ -90,64 +85,36 @@ object QueenAgent {
   }
 
   /**
-   * Find a new position for the calling queen that is consistent with the provided local view
+   * Find a new position for the calling queen that is consistent with the provided local view,
+   * or the nogoods that are compatible with the provided agent view that make it impractical
    *
-   * @param agentView An agent view that doesn't contain the position of the calling queen
-   * @param numRows   The number of rows in the problem
-   * @param nogoods   The list of accumulated nogoods
-   * @param rowId     The row id of the calling queen
-   * @return a Some encapsulating the new position, or None if no acceptable solution could be found
+   * @param lesserAgentView An agent view that doesn't contain the position of the calling queen
+   *                        (i.e. a lesser agent view)
+   * @param numRows         The number of rows in the problem
+   * @param nogoods         The list of accumulated nogoods
+   * @param rowId           The row id of the calling queen
+   * @return a Right containing the position that can satisfy all the constraints and doesn't cause
+   *         the augmented agent view to be compatible with a nogood from the list, or the nogoods
+   *         that are compatible with the provided agent view
    */
-  def findAcceptableSolution(agentView: LocalView, numRows: Int, nogoods: Nogoods, rowId: Int): Option[Int] =
-    Range(0, numRows).find { newPotentialColumn =>
-      acceptableSettlement(nogoods)(rowId, newPotentialColumn) apply agentView
-    }
+  def findAcceptableSolution(lesserAgentView: LocalView, numRows: Int, nogoods: Nogoods,
+                             rowId: Int): Either[StateInvalidResponses, ColumnValueType] = {
+    val domain: ColumnDomain = ChessboardStateValidator.domain(numRows)
 
-  /**
-   * Check if the current agent view is not compatible with all the nogoods collected up until now.
-   *
-   * @param nogoods The list of nogoods that have been received / generated up to this point
-   * @return true if no nogood compatible with the current local view could be found, and false otherwise
-   */
-  def checkAgentViewIncompatibility(nogoods: Nogoods, rowId: Int): LocalView => Boolean = agentView =>
-    nogoods filter {
-      _.positions.keySet contains rowId
-    } forall {
-      currentNoGood =>
-        if(currentNoGood.checkCompatibility(agentView)){
-          logger.debug(s"$agentView + is compatible with nogood $currentNoGood")
-          false
+    @tailrec
+    def innerLoop(index: Index, invalidResponses: StateInvalidResponses): Either[StateInvalidResponses, ColumnValueType] =
+      if (index == domain.length) Left(invalidResponses)
+      else {
+        logger.debug(s"current trial value: ${domain(index)}")
+        ChessboardStateValidator.stateIsAcceptableForAgent(nogoods, rowId, domain(index), lesserAgentView) match {
+          case ChessboardStateValidator.StateValidResponse =>
+            Right(domain(index))
+          case invalidResponse: ChessboardStateValidator.StateInvalidResponse =>
+            innerLoop(index + 1, invalidResponses :+ invalidResponse)
         }
-        else true
-    }
+      }
 
-  /**
-   * Check if the position of the calling agent satisfies all the constraints with respect to the associated
-   * local view
-   *
-   * @param rowId the row number associated with the calling agent
-   * @param colId the current column value assignment of the calling agent
-   * @return
-   */
-  def constraintsAreSatisfied(rowId: Int, colId: Int): LocalView => Boolean = agentView =>
-    agentView forall {
-      case (otherRowId, otherColId) if otherRowId != rowId =>
-        ConflictAvoidingArgument(otherRowId, otherColId, rowId, colId).checkConstraint
-      case _ => true
-    }
-
-  /**
-   * Check if the current value assignment (position) can lead to a possible solution
-   *
-   * @param rowId      the row associated with the calling agent
-   * @param queenState the current state of the calling agent
-   * @return a function that takes the local view as an argument and returns true if it can lead to a
-   *         solution, or false otherwise
-   */
-  def acceptableSettlement(nogoods: Nogoods)(rowId: Int, colId: Int): LocalView => Boolean = agentView => {
-    require(!agentView.contains(rowId), "The provided LocalView should not contain the provided rowId queen key")
-    (checkAgentViewIncompatibility(nogoods, rowId) apply
-      agentView + (rowId -> colId)) && (constraintsAreSatisfied(rowId, colId) apply agentView)
+    innerLoop(0, EmptyStateInvalidResponses)
   }
 
   /**
@@ -165,9 +132,33 @@ object QueenAgent {
                 queenRegistry: YellowBook): Behavior[QueenMessageT] = {
     val agentViewToTest: LocalView = newQueenState.agentView.view.filterKeys(_ != currentRow).toMap
     findAcceptableSolution(agentViewToTest, numRows, newQueenState.communicatedNogoods, currentRow) match {
-      case Some(newColumnPosition) =>
+      case Left(stateInvalidResponses: StateInvalidResponses) =>
+        context.log.debug("No acceptable solution could be found; Emit a nogood;")
+        /* Create a new Nogood using the hyper-resolution rule: */
+        val newNogood: Nogood = new HyperResolutionRule(Range(0, numRows).toArray,
+          currentRow, newQueenState.agentView).applyHyperResolutionRule(stateInvalidResponses).head
+        context.log.debug(s"Found nogood: $newNogood")
+        if (newNogood.isEmpty) {
+          /* Broadcast to all agents that there is no available
+          * solution for this problem: */
+          queenRegistry.foreach { case (agentId, actorRef) if agentId != currentRow =>
+            actorRef ! QueenMessageNoSolution()
+          }
+          /* Terminate: */
+          Behaviors.stopped
+        }
+        else {
+          /* Communicate the nogood to the lowest priority queen from the nogood: */
+          queenRegistry(newNogood.getLowestPriorityAgentId) ! QueenMessageAnswerNogood(newNogood, currentRow)
+          processMessages(
+            currentRow,
+            numRows,
+            newQueenState,
+            queenRegistry
+          )
+        }
+      case Right(newColumnPosition: ColumnValueType) =>
         val newQueenState2: QueenState = newQueenState.changeCol(newColumnPosition)
-        context.log.debug(s"Found possible acceptable solution $newColumnPosition in the view: $agentViewToTest; new agent view: ${newQueenState2.agentView}")
         /* Send the new value as an Ok? message to all the lower priority queens connected: */
         newQueenState.neighbours.foreach { neighbourId =>
           context.log.debug(s"Send Ok($currentRow, $newColumnPosition) to $neighbourId")
@@ -179,43 +170,19 @@ object QueenAgent {
           newQueenState2,
           queenRegistry
         )
-      case None =>
-        context.log.debug("No acceptable solution could be found; Emit a nogood;")
-        /* Create a new Nogood using the hyper-resolution rule: */
-        val newNogood: Nogood = new HyperResolutionRule(Range(0, numRows).toArray, newQueenState.communicatedNogoods,
-          currentRow, newQueenState.agentView).applyHyperResolutionRule.head
-        context.log.debug(s"Found nogood: $newNogood")
-        /* Communicate the nogood to the lowest priority queen from the nogood: */
-        queenRegistry(newNogood.getLowestPriorityAgentId) ! QueenMessageAnswerNogood(newNogood, currentRow)
-        if (newNogood.isEmpty) {
-          /* Broadcast to all agents that there is no available
-          * solution for this problem: */
-          queenRegistry.foreach { case (agentId, actorRef) if agentId != currentRow =>
-            actorRef ! QueenMessageNoSolution()
-          }
-          /* Terminate: */
-          Behaviors.stopped
-        }
-        else {
-          processMessages(
-            currentRow,
-            numRows,
-            newQueenState,
-            queenRegistry
-          )
-        }
     }
   }
 
 
   /**
-   *
-   * @param queenState
-   * @param currentRow
-   * @param numRows
-   * @param queenYellowBook
-   * @param messageQueue
-   * @return
+   * Process all the messages that have been sent to this agent while it was still idle.
+   * @param queenState The state of the agent
+   * @param currentRow The row associated with this agent
+   * @param numRows The number of rows from the problem specification
+   * @param queenYellowBook The agents yellow book, that specifies the memory / ip address / some reference point
+   *                        for the agent associated with some row index
+   * @param messageQueue The queue that keeps track of all the messages that have been sent to this agent
+   * @return A new behaviour that will start the real-time processing of the messages
    */
   def processQueue(queenState: QueenState, currentRow: Int, numRows: Int,
                    queenYellowBook: YellowBook, messageQueue: Queue[QueenMessageT]): Behavior[QueenMessageT] = {
@@ -248,7 +215,8 @@ object QueenAgent {
             Range(0, numRows)
               .find(rowId => listing.key.id.equals(queenServiceKeyString(rowId))) match {
               case Some(rowToAdd) =>
-                val serviceInstances: Set[ActorRef[QueenMessageT]] = listing.allServiceInstances(queenServiceKey(rowToAdd))
+                val serviceInstances: Set[ActorRef[QueenMessageT]] =
+                  listing.allServiceInstances(queenServiceKey(rowToAdd))
                 if (serviceInstances.isEmpty) {
                   context.log.debug(s"somehow, the agent ${rowToAdd} is and is not in the listing; Try again")
                   context.system.receptionist ! Receptionist.Find(queenServiceKey(rowToAdd), listingAdapter(context))
@@ -316,21 +284,26 @@ object QueenAgent {
                       queenRegistry: YellowBook): Behavior[QueenMessageT] =
     Behaviors.receiveMessage {
       case QueenMessageAskOk(otherRowId, otherColId) =>
-        queenState.context.log.debug(s"$currentRow has received QueenMessageAskOk($otherRowId, $otherColId); old queen agent: ${queenState}")
+        queenState.context.log.debug(s"$currentRow has received QueenMessageAskOk($otherRowId, $otherColId); " +
+          s"old queen agent nogoods: ${queenState.communicatedNogoods.mkString("Array(", ", ", ")")}")
         /* Check if the value of the receiving queen is consistent with its new agent view: */
         val newQueenState: QueenState = queenState.changeAgentValue(otherRowId, otherColId)
-        queenState.context.log.debug(s"new queen agent: ${newQueenState}")
-        if (!(acceptableSettlement(newQueenState.communicatedNogoods)
-        (currentRow, newQueenState.currentCol) apply newQueenState.agentView - currentRow)) {
-          /* Search for another value from this domain that is consistent with the new agent view
-          * (except for the row of the calling queen)
-          * */
-          newQueenState.context.log.debug("proceed with backtrack")
-          backtrack(newQueenState.context, newQueenState, currentRow, numRows, queenRegistry)
-        }
-        else {
-          newQueenState.context.log.debug("The current position is fine")
-          processMessages(currentRow, numRows, newQueenState, queenRegistry)
+        queenState.context.log.debug(s"new queen agent: $newQueenState")
+        ChessboardStateValidator.stateIsAcceptableForAgent(
+          newQueenState.communicatedNogoods,
+          currentRow,
+          newQueenState.currentCol,
+          newQueenState.agentView - currentRow
+        ) match {
+          case ChessboardStateValidator.StateValidResponse =>
+            newQueenState.context.log.debug("The current position is fine")
+            processMessages(currentRow, numRows, newQueenState, queenRegistry)
+          case _: ChessboardStateValidator.StateInvalidResponse =>
+            /* Search for another value from this domain that is consistent with the new agent view
+            * (except for the row of the calling queen)
+            * */
+            newQueenState.context.log.debug("proceed with backtrack")
+            backtrack(newQueenState.context, newQueenState, currentRow, numRows, queenRegistry)
         }
       case QueenMessageAnswerNogood(nogood, senderId) =>
         queenState.context.log.debug(s"$currentRow received another nogood message $nogood from $senderId")
@@ -340,7 +313,7 @@ object QueenAgent {
             .foldLeft(queenState.addNogood(nogood)) {
               case (acc, (queenId, colVal)) =>
                 if (!acc.neighbours.contains(queenId)) {
-//                  queenRegistry(queenId) ! QueenMessageAddLink(currentRow)
+                  //                  queenRegistry(queenId) ! QueenMessageAddLink(currentRow)
                   acc
                     .changeAgentValue(queenId, colVal)
                 } else {
@@ -369,9 +342,9 @@ object QueenAgent {
       case QueenMessageAddLink(senderId) =>
         queenState.context.log.info(s"Agent $currentRow has received a QueenMessageAddLink($senderId) message;")
         /* Add a link from currentRow to senderId; */
-        val newQueenState: QueenState = queenState.addNeighbor(senderId)
+        //        val newQueenState: QueenState = queenState.addNeighbor(senderId)
         queenRegistry(senderId) ! QueenMessageAskOk(rowId = currentRow, colId = queenState.currentCol)
-        processMessages(currentRow, numRows, newQueenState, queenRegistry)
+        processMessages(currentRow, numRows, queenState, queenRegistry)
     }
 
 

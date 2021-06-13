@@ -1,6 +1,7 @@
 package agents.logic
 
-import agents.{ColumnDomain, ColumnValueType, Index, Indexes, LocalView, LocalViews, Nogood, Nogoods}
+import agents.logic.ChessboardStateValidator.{AcceptanceResponses, StateInvalidResponses}
+import agents.{ColumnDomain, ColumnValueType, EmptyLocalViews, Index, Indexes, LocalView, LocalViews, Nogood, Nogoods}
 import akka.actor.typed.scaladsl.LoggerOps
 import constraints.ConflictAvoidingArgument
 import exception.Exceptions.NoBacktrackingRequiredException
@@ -14,7 +15,6 @@ import org.slf4j.Logger
 import scala.collection.immutable.{AbstractMap, SeqMap, SortedMap}
 
 class HyperResolutionRule(domain: ColumnDomain,
-                          nogoods: Nogoods,
                           currentRow: Int,
                           localView: LocalView)(implicit logger: Logger) {
 
@@ -34,7 +34,7 @@ class HyperResolutionRule(domain: ColumnDomain,
    * @return the list of nogoods that prevent this agent view from reaching a solution,
    *         or NoBacktrackingRequiredException, if a solution is still reachable
    */
-  private def nogoodsToConsider: LocalViews = {
+  private def nogoodsToConsider(nogoods: Nogoods): LocalViews = {
     val imaginaryLocalView: LocalView = localView - currentRow
     val validNogoods: Nogoods = nogoods.filter(_.positions.keySet.contains(currentRow))
       .sortBy(-_.positions.keySet.size)
@@ -57,51 +57,28 @@ class HyperResolutionRule(domain: ColumnDomain,
       }
   }.toArray
 
-
-  private def potentialMergingIndexes(key: Int, columnAssignment: ColumnValueType,
-                                      headView: LocalView): Array[Option[Index]] = ???
-
   /**
-   *
-   * @param headView
-   * @param nogoods
-   * @return
+   * Merge the elements of the provided list of agent views, using the following merging rules:
+   *  - if an agent view element can also be found in another element, then remove it from the list
+   * @param assignmentLocalViews the list of local views to be processed
+   * @return the list of agent views where the elements have been merged
    */
-  private def findSimilarLocalViews(headView: LocalView, accumulator: LocalViews): LocalViews = ???
-
-  /**
-   * Apply the hyper-resolution rule on the domain of the current row and on the list of nogoods
-   * that has been accumulated by this agent
-   *
-   * @param domain  the set of column value assignments that this agent has tried
-   * @param nogoods the list of nogoods that has been accumulated by this agent
-   * @return a list of nogoods
-   */
-  def applyHyperResolutionRule: Array[Nogood] = {
-    /*
-    * Theoretically, this method should only be called when the current row cannot choose any column assignment,
-    * therefore, for each possible column assignment, either a constraint is violated or a Nogood is compatible with
-    * the corresponding agent view generated. If that's not the case, then the method should not have been
-    * called.
-    * */
-
-    val assignmentLocalViews = nogoodsToConsider
-
+  private def mergeLocalViews(assignmentLocalViews: LocalViews): LocalViews = {
     @tailrec
-    def mergeElements(index: Index, acc: LocalViews): LocalViews =
+    def innerLoop(index: Index, acc: LocalViews): LocalViews = {
       if (index < assignmentLocalViews.length) {
         if (acc.exists(assignmentLocalViews(index).toSet subsetOf _.toSet)) {
           /* If the head is already contained in an element from acc, use the more general nogood: */
-          mergeElements(index + 1, acc)
+          innerLoop(index + 1, acc)
         }
-        else if (acc.exists(_.toSet subsetOf assignmentLocalViews(index).toSet)){
+        else if (acc.exists(_.toSet subsetOf assignmentLocalViews(index).toSet)) {
           /* Again, use the more general nogood: */
           val indexToBeReplaced = acc.indexWhere(_.toSet subsetOf assignmentLocalViews(index).toSet)
           val newAcc = acc.updated(indexToBeReplaced, assignmentLocalViews(index))
-          mergeElements(index + 1, newAcc)
+          innerLoop(index + 1, newAcc)
         } else {
           /* merge the nogoods wherever there are no conflicts: */
-          val newAcc: LocalViews = if(acc.exists(_.isNotConflicting(assignmentLocalViews(index)))){
+          val newAcc: LocalViews = if (acc.exists(_.isNotConflicting(assignmentLocalViews(index)))) {
             acc.map {
               case localView: LocalView if localView.isNotConflicting(assignmentLocalViews(index)) =>
                 localView ++ assignmentLocalViews(index)
@@ -110,44 +87,41 @@ class HyperResolutionRule(domain: ColumnDomain,
           } else {
             acc :+ assignmentLocalViews(index)
           }
-          mergeElements(index + 1, newAcc)
+          innerLoop(index + 1, newAcc)
         }
       }
       else acc
-    //      remainingNogoods match {
-    //        case ::(head, next) =>
-    //          if (acc.exists(head.toSet subsetOf _.toSet)) {
-    //            /* If the head is already contained in an element from acc, use the more general nogood: */
-    //            mergeElements(next, acc)
-    //          } else if (acc.exists(_.toSet subsetOf head.toSet)) {
-    //            /* Again, use the more general nogood: */
-    //            val indexToBeReplaced = acc.indexWhere(_.toSet subsetOf head.toSet)
-    //            val newAcc = acc.updated(indexToBeReplaced, head)
-    //            mergeElements(next, newAcc)
-    //          } else {
-    //            /* merge the nogoods wherever there are no conflicts: */
-    //            val newAcc: List[LocalView] =
-    //              if (acc.exists(_.isNotConflicting(head))) {
-    //                acc.map {
-    //                  case localView: LocalView if localView.isNotConflicting(head) =>
-                        /* If there are nogoods that only differ in the value assignment of one
-                        * particular row and there's one such nogood for each possible column assignment
-                        * (i.e. the entire range of values is covered), then merge those nogoods into one,
-                        * without that value (this guarantees that, if there's no solution, then an
-                        * empty nogood is generated):
-                        *  */
-    //
-    //                    localView ++ head
-    //                  case localView: LocalView =>
-    //                    localView
-    //                }
-    //              } else {
-    //                acc :+ head
-    //              }
-    //            mergeElements(next, newAcc)
-    //          }
-    //        case Nil => acc
-    val mergedLocalViews: LocalViews = mergeElements(0, Array.empty[LocalView])
+    }
+    innerLoop(0, EmptyLocalViews)
+  }
+
+  /**
+   * Apply the hyper-resolution rule on the domain of the current row and on the list of nogoods
+   * that has been accumulated by this agent
+   *
+   * @param acceptanceResponses A list of StateInvalidResponse instances containing the Nogoods that
+   *                            identified the current lesser agent view (i.e. the position of the other
+   *                            agents except for the caller) as a state that cannot lead to a solution
+   * @return a list of nogoods
+   */
+  def applyHyperResolutionRule(acceptanceResponses: StateInvalidResponses): Array[Nogood] = {
+    /*
+    * Theoretically, this method should only be called when the current row cannot choose any column assignment,
+    * therefore, for each possible column assignment, either a constraint is violated or a Nogood is compatible with
+    * the corresponding agent view generated. If that's not the case, then the method should not have been
+    * called.
+    * */
+
+    val assignmentLocalViews: LocalViews = acceptanceResponses.map(_.nogood.positions - currentRow)
+    logger.debug(s"assignmentLocalViews: ${assignmentLocalViews.mkString("Array(", ", ", ")")}")
+
+    val mergedLocalViews: LocalViews = mergeLocalViews(assignmentLocalViews)
+    /* If there are nogoods that only differ in the value assignment of one
+    * particular row and there's one such nogood for each possible column assignment
+    * (i.e. the entire range of values is covered), then merge those nogoods into one,
+    * without that value (this guarantees that, if there's no solution, then an
+    * empty nogood is generated):
+    *  */
     mergedLocalViews.map(Nogood)
   }
 

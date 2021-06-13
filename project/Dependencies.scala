@@ -4,7 +4,7 @@ object Dependencies {
 
   lazy val akkaVersion = "2.6.12"
   lazy val logbackVersion = "1.2.3"
-  lazy val scalatestVersion = "3.1.0"
+  lazy val scalatestVersion = "3.2.9"
 
   object AkkaDependencies {
     lazy val akkaTypedActor = "com.typesafe.akka" %% "akka-actor-typed" % akkaVersion
