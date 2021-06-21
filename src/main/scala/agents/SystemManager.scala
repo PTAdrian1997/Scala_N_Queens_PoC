@@ -1,15 +1,16 @@
 package agents
 
 import agents.QueenAgent.QueenMessageT
-import akka.actor.typed.ActorRef
-import akka.actor.typed.Behavior
+import akka.actor.typed.{ActorRef, Behavior, MailboxSelector}
 import akka.actor.typed.scaladsl.{ActorContext, Behaviors, LoggerOps}
-
 
 object SystemManager {
 
   trait AdminMessageT
   case class QueenTerminated(rowId: Int) extends AdminMessageT
+
+  val mailboxProps: MailboxSelector = MailboxSelector
+    .fromConfig("nqueens-problem.ok-message-squashing-mailbox")
 
   def updateStatus(numberOfAgentsAlive: Int): Behavior[AdminMessageT] =
     Behaviors.receive{
@@ -28,7 +29,8 @@ object SystemManager {
       Range(0, numberOfQueens).foreach{rowId =>
         val queenActor: ActorRef[QueenMessageT] = context.spawn(
           QueenAgent(rowId, numberOfQueens),
-          QueenAgent.getQueenId(rowId)
+          QueenAgent.getQueenId(rowId),
+          mailboxProps
         )
         context.watchWith(queenActor, QueenTerminated(rowId))
       }
