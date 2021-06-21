@@ -312,7 +312,7 @@ object QueenAgent {
           nogood.positions
             .foldLeft(queenState.addNogood(nogood)) {
               case (acc, (queenId, colVal)) =>
-                if (!acc.neighbours.contains(queenId)) {
+                if (!acc.agentView.contains(queenId)) {
                   //                  queenRegistry(queenId) ! QueenMessageAddLink(currentRow)
                   acc
                     .changeAgentValue(queenId, colVal)
