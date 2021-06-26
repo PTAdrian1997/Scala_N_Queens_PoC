@@ -18,9 +18,10 @@ case class FindingStateAgentInput(currentRow: Int,
 class FindingAgentsState {
 
   /**
-   *
-   * @param inputObj
-   * @param context
+   * Change the state of the actor. The next state is selected with the help of inputObj
+   * @param inputObj The FindingStateAgentInput instance containing all the information
+   *                 gathered during the searching process
+   * @param context The actor context object needed for logging
    * @return
    */
   def moveOnToProcessMessages(inputObj: FindingStateAgentInput,
@@ -43,9 +44,11 @@ class FindingAgentsState {
   }
 
   /**
-   *
-   * @param inputObj
-   * @return
+   * Find the agents in the current environment based on their Registration Keys.
+   * @param inputObj The FindingStateAgentInput instance containing the information accumulated
+   *                 during the search
+   * @return Either a recursive call or the next state, selected based on the information
+   *         gathered during the search
    */
   def findAgents(inputObj: FindingStateAgentInput): Behavior[QueenMessageT] =
     Behaviors.setup {
@@ -61,11 +64,7 @@ class FindingAgentsState {
                 if (serviceInstances.isEmpty) {
                   context.log.debug(s"somehow, the agent ${rowToAdd} is and is not in the listing; Try again")
                   context.system.receptionist ! Receptionist.Find(queenServiceKey(rowToAdd), listingAdapter(context))
-                  findAgents(FindingStateAgentInput(
-                    inputObj.currentRow, inputObj.numRows, inputObj.queenYellowBook, inputObj.finishedAgents,
-                    inputObj.messageQueue
-                  ))
-//                  findAgents(inputObj)
+                  findAgents(inputObj)
                 }
                 else {
                   val newYellowBook: YellowBook = inputObj.queenYellowBook + (rowToAdd -> serviceInstances.head)
@@ -81,21 +80,13 @@ class FindingAgentsState {
                         newYellowBook(localRow) ! FoundAllAgents(inputObj.currentRow)
                     }
                     if(inputObj.finishedAgents + 1 == inputObj.numRows) {
-//                      /**
-//                       * Send the Ok? message to the lower neighbour, if the current queen doesn't have the lowest
-//                       * priority:
-//                       */
+                      /**
+                       * Send the Ok? message to the lower neighbour, if the current queen doesn't have the lowest
+                       * priority:
+                       */
                       Range(inputObj.currentRow + 1, inputObj.numRows).foreach {
                         newYellowBook(_) ! QueenMessageAskOk(rowId = inputObj.currentRow, colId = 0)
                       }
-//                      processQueue(QueenState(
-//                        context,
-//                        currentRow = inputObj.currentRow,
-//                        currentCol = 0,
-//                        agentView = Map(inputObj.currentRow -> 0),
-//                        communicatedNogoods = EmptyNogoods,
-//                        neighbours = Range(inputObj.currentRow + 1, inputObj.numRows).toSet,
-//                      ), inputObj.currentRow, inputObj.numRows, newYellowBook, inputObj.messageQueue)
                       moveOnToProcessMessages(inputObj.copy(queenYellowBook = newYellowBook), context)
                     }
                     else {
@@ -111,19 +102,10 @@ class FindingAgentsState {
                 }
               case None =>
                 context.log.info("The subscribed agent could not be identified")
-//                findAgents(currentRow, numRows, queenYellowBook, finishedAgents, messageQueue)
                 findAgents(inputObj)
             }
           case FoundAllAgents(_) =>
             if(inputObj.finishedAgents + 1 == inputObj.numRows && inputObj.queenYellowBook.size == inputObj.numRows){
-//              processQueue(QueenState(
-//                context,
-//                currentRow = inputObj.currentRow,
-//                currentCol = 0,
-//                agentView = Map(inputObj.currentRow -> 0),
-//                communicatedNogoods = EmptyNogoods,
-//                neighbours = Range(inputObj.currentRow + 1, inputObj.numRows).toSet,
-//              ), inputObj.currentRow, inputObj.numRows, inputObj.queenYellowBook, inputObj.messageQueue)
               moveOnToProcessMessages(inputObj, context)
             }
             else {
