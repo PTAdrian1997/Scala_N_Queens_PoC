@@ -31,11 +31,12 @@ object QueenSquashMailbox {
           queue.enqueue(handle)
         case QueenMessageNoSolution =>
           queue.enqueue(handle)
+        case _ => queue.enqueue(handle)
       }
       queue.enqueue(handle)
     }
 
-    override def dequeue(): Envelope = queue.dequeue()
+    override def dequeue(): Envelope = if(queue.nonEmpty) queue.dequeue() else null
 
     override def numberOfMessages: ColumnValueType = queue.size
 

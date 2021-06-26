@@ -2,6 +2,7 @@ package agents
 
 import agents.logic.ChessboardStateValidator.{EmptyStateInvalidResponses, StateInvalidResponses}
 import agents.logic.{ChessboardStateValidator, HyperResolutionRule}
+import agents.states.{FindingAgentsState, FindingStateAgentInput}
 import akka.actor.typed.{ActorRef, Behavior}
 import akka.actor.typed.receptionist.{Receptionist, ServiceKey}
 import akka.actor.typed.scaladsl.{ActorContext, Behaviors, LoggerOps}
@@ -227,22 +228,34 @@ object QueenAgent {
                   context.log.debug(s"found agent ${rowToAdd}, new YB size: ${newYellowBook.size}")
                   if (newYellowBook.size == numRows) {
                     context.log.debug("I finished")
-
                     /**
-                     * Send the Ok? message to the lower neighbour, if the current queen doesn't have the lowest
-                     * priority:
+                     * Inform the other agents that you have found all the agents, yourself included:
                      */
-                    Range(currentRow + 1, numRows).foreach {
-                      newYellowBook(_) ! QueenMessageAskOk(rowId = currentRow, colId = 0)
+                    Range(0, numRows).foreach {
+                      case localRow if localRow == currentRow =>
+                      case localRow =>
+                        newYellowBook(localRow) ! FoundAllAgents(currentRow)
                     }
-                    processQueue(QueenState(
-                      context,
-                      currentRow = currentRow,
-                      currentCol = 0,
-                      agentView = Map(currentRow -> 0),
-                      communicatedNogoods = EmptyNogoods,
-                      neighbours = Range(currentRow + 1, numRows).toSet,
-                    ), currentRow, numRows, newYellowBook, messageQueue)
+                    if(finishedAgents + 1 == numRows) {
+                      /**
+                       * Send the Ok? message to the lower neighbour, if the current queen doesn't have the lowest
+                       * priority:
+                       */
+                      Range(currentRow + 1, numRows).foreach {
+                        newYellowBook(_) ! QueenMessageAskOk(rowId = currentRow, colId = 0)
+                      }
+                      processQueue(QueenState(
+                        context,
+                        currentRow = currentRow,
+                        currentCol = 0,
+                        agentView = Map(currentRow -> 0),
+                        communicatedNogoods = EmptyNogoods,
+                        neighbours = Range(currentRow + 1, numRows).toSet,
+                      ), currentRow, numRows, newYellowBook, messageQueue)
+                    }
+                    else {
+                      findingQueensBehavior(currentRow, numRows, newYellowBook, finishedAgents + 1, messageQueue)
+                    }
                   }
                   else {
                     findingQueensBehavior(currentRow, numRows, newYellowBook, finishedAgents, messageQueue)
@@ -251,6 +264,20 @@ object QueenAgent {
               case None =>
                 context.log.info("The subscribed agent could not be identified")
                 findingQueensBehavior(currentRow, numRows, queenYellowBook, finishedAgents, messageQueue)
+            }
+          case FoundAllAgents(_) =>
+            if(finishedAgents + 1 == numRows && queenYellowBook.size == numRows){
+              processQueue(QueenState(
+                context,
+                currentRow = currentRow,
+                currentCol = 0,
+                agentView = Map(currentRow -> 0),
+                communicatedNogoods = EmptyNogoods,
+                neighbours = Range(currentRow + 1, numRows).toSet,
+              ), currentRow, numRows, queenYellowBook, messageQueue)
+            }
+            else {
+              findingQueensBehavior(currentRow, numRows, queenYellowBook, finishedAgents + 1, messageQueue)
             }
           case message =>
             context.log.debug(s"$currentRow has received $message ahead of time")
@@ -264,8 +291,10 @@ object QueenAgent {
     Range(0, numberOfQueens).foreach { otherRow =>
       context.system.receptionist ! Receptionist.Find(queenServiceKey(otherRow), listingAdapter(context))
     }
-    findingQueensBehavior(rowId, numberOfQueens, Map.empty[Int, ActorRef[QueenMessageT]], 0,
-      Queue.empty[QueenMessageT])
+//    findingQueensBehavior(rowId, numberOfQueens, Map.empty[Int, ActorRef[QueenMessageT]], 0,
+//      Queue.empty[QueenMessageT])
+    new FindingAgentsState().findAgents(FindingStateAgentInput(rowId, numberOfQueens,
+      Map.empty[Int, ActorRef[QueenMessageT]], 0, Queue.empty[QueenMessageT]))
   }
 
   /**

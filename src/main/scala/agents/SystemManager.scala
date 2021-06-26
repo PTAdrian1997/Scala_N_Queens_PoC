@@ -29,8 +29,9 @@ object SystemManager {
       Range(0, numberOfQueens).foreach{rowId =>
         val queenActor: ActorRef[QueenMessageT] = context.spawn(
           QueenAgent(rowId, numberOfQueens),
-          QueenAgent.getQueenId(rowId),
-          mailboxProps
+          QueenAgent.getQueenId(rowId)
+//          ,
+//          mailboxProps
         )
         context.watchWith(queenActor, QueenTerminated(rowId))
       }
